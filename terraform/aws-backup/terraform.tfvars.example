@@ -1,0 +1,8 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is gitignored)
+aws_region  = "us-east-1"
+bucket_name = "CHANGE-ME-homelab-backups"
+
+# backup_prefixes = {
+#   k3s            = "k3s/"
+#   home-assistant = "home-assistant/"
+# }

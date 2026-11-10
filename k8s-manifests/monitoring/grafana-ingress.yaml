@@ -1,0 +1,22 @@
+# Exposed only via the Cloudflare Tunnel -> Traefik. TLS terminates at the
+# Cloudflare edge; no router ports are opened. ${GRAFANA_HOST} comes from .env.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ${GRAFANA_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prometheus-stack-grafana
+                port:
+                  number: 80

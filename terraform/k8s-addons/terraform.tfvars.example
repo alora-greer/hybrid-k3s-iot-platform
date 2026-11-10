@@ -1,0 +1,10 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is gitignored)
+kubeconfig_path        = "~/.kube/lab-k3s.yaml"
+grafana_admin_password = "CHANGE-ME"
+
+# Pin chart versions (`helm search repo <repo>/<chart>`):
+# chart_versions = {
+#   sealed_secrets        = "x.y.z"
+#   kube_prometheus_stack = "x.y.z"
+#   k8sgpt_operator       = "x.y.z"
+# }

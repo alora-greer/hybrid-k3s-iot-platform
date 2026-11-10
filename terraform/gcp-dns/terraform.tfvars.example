@@ -1,0 +1,9 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is gitignored)
+project_id           = "CHANGE-ME-gcp-project"
+domain               = "example.com."
+cloudflare_tunnel_id = "00000000-0000-0000-0000-000000000000"
+tunnel_hostnames     = ["grafana"]
+
+# extra_records = {
+#   google-verify = { name = "", type = "TXT", rrdatas = ["\"google-site-verification=...\""] }
+# }

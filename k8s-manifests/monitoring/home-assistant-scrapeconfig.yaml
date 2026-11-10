@@ -1,0 +1,23 @@
+# Scrapes Home Assistant OS on the Raspberry Pi (outside the cluster).
+# Requires the `prometheus:` integration enabled in Home Assistant and a
+# Long-Lived Access Token sealed into the `home-assistant-token` SealedSecret
+# (see `make seal-ha-token`). ${HA_SCRAPE_TARGET} is rendered from .env.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: home-assistant
+  namespace: monitoring
+spec:
+  metricsPath: /api/prometheus
+  scheme: HTTP
+  scrapeInterval: 60s
+  authorization:
+    type: Bearer
+    credentials:
+      name: home-assistant-token
+      key: token
+  staticConfigs:
+    - targets:
+        - ${HA_SCRAPE_TARGET}
+      labels:
+        service: home-assistant

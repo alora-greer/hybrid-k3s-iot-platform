@@ -1,0 +1,99 @@
+# =============================================================================
+# STRICT .gitignore — secrets, state, and machine-local config never get tracked.
+# If you need to share a shape, commit a *.example file instead.
+# =============================================================================
+
+# --- Environment / secrets ---------------------------------------------------
+.env
+.env.*
+!.env.example
+*.envrc
+.envrc
+secrets.yaml
+secrets.yml
+*.secret.yaml
+*.secret.yml
+*-secret.yaml
+*-secret.yml
+*.unsealed.yaml
+credentials
+credentials.json
+*.credentials.json
+service-account*.json
+*-sa-key.json
+.aws/
+.gcloud/
+.config/gcloud/
+
+# --- Keys & certificates -----------------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa*
+id_ed25519*
+*.gpg
+*.asc
+
+# --- Terraform ---------------------------------------------------------------
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+*.tfplan
+tfplan
+plan.out
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# NOTE: .terraform.lock.hcl IS committed on purpose (reproducible providers).
+
+# --- Kubernetes --------------------------------------------------------------
+kubeconfig
+kubeconfig.yaml
+kubeconfig*.yaml
+*.kubeconfig
+.kube/
+k3s.yaml
+# Output of `make render` (contains substituted, environment-specific values)
+.rendered/
+
+# --- Backups / dumps ---------------------------------------------------------
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.db
+*.sqlite
+*.sqlite3
+etcd-snapshot-*
+on-demand-*
+
+# --- AI tooling (local-only state) -------------------------------------------
+.claude/settings.local.json
+.claude/*.local.*
+.k8sgpt.yaml
+.ollama/
+
+# --- Editors / OS ------------------------------------------------------------
+.DS_Store
+.AppleDouble
+._*
+.zed/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Logs --------------------------------------------------------------------
+*.log

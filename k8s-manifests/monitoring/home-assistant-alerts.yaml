@@ -1,0 +1,45 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: home-assistant
+  namespace: monitoring
+spec:
+  groups:
+    - name: home-assistant.availability
+      rules:
+        - alert: HomeAssistantDown
+          expr: up{service="home-assistant"} == 0 or absent(up{service="home-assistant"})
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Home Assistant metrics endpoint is unreachable
+            description: >-
+              Prometheus has failed to scrape /api/prometheus for 5 minutes.
+              Check the Pi, the token in the home-assistant-token secret, and
+              the DHCP reservation on the router.
+
+    - name: home-assistant.environment
+      rules:
+        # Metric names depend on the unit configured in Home Assistant
+        # (…_celsius vs …_fahrenheit). Adjust thresholds to taste.
+        - alert: RoomTemperatureOutOfRange
+          expr: |
+            homeassistant_sensor_temperature_celsius < 15
+              or
+            homeassistant_sensor_temperature_celsius > 30
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.friendly_name }} is {{ $value | printf \"%.1f\" }}°C"
+            description: Temperature has been outside 15–30°C for 15 minutes.
+
+        - alert: ZigbeeSensorStale
+          expr: time() - homeassistant_last_updated_time_seconds{domain="sensor"} > 3 * 3600
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.friendly_name }} has not reported in 3h"
+            description: Likely a dead battery or a dropped Zigbee mesh route.

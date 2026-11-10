@@ -1,0 +1,18 @@
+# K8sGPT continuously analyzes the cluster and asks a local LLM (Ollama on the
+# Mac workstation, via its OpenAI-compatible API) to explain findings.
+# No cluster data leaves the home network. Values rendered from .env.
+apiVersion: core.k8sgpt.ai/v1alpha1
+kind: K8sGPT
+metadata:
+  name: k8sgpt-ollama
+  namespace: k8sgpt-operator-system
+spec:
+  ai:
+    enabled: true
+    backend: localai
+    baseUrl: ${OLLAMA_BASE_URL}
+    model: ${OLLAMA_MODEL}
+    anonymized: true
+  noCache: false
+  repository: ghcr.io/k8sgpt-ai/k8sgpt
+  version: ${K8SGPT_VERSION}
