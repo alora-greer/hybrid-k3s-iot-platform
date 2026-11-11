@@ -7,6 +7,12 @@ This guide documents the configuration required to run a K3s control plane insid
 > install, see [k3s-iot-stack.md](k3s-iot-stack.md#k3s-server-setup-lab-k3s-ctrl-01).
 > The rest of the platform (add-ons, manifests, backups) is identical either way.
 
+> **Canonical K3s install:** the quick installs in Phase 3 and Phase 4 below do
+> **not** use `/etc/rancher/k3s/config.yaml`, so you get no embedded etcd
+> (`cluster-init`) and **no S3 etcd snapshots**. For this platform, install K3s
+> as described in [bootstrap.md "Shared: K3s install"](bootstrap.md#shared-k3s-install)
+> and use this guide for the Windows/WSL2 host setup only.
+
 Placeholders used below (look them up locally; never commit real values):
 
 | Placeholder | Meaning |
@@ -28,6 +34,10 @@ Placeholders used below (look them up locally; never commit real values):
    New-NetFirewallRule -DisplayName "K3s API" -Direction Inbound -LocalPort 6443 -Protocol TCP -Action Allow
    ```
 
+   > **Security note:** this rule is unscoped (any profile, any remote
+   > address). Prefer the Private-profile, LocalSubnet-scoped rules in
+   > [bootstrap.md B5](bootstrap.md#k3s-host-preparation).
+
 ## Phase 2: WSL2 Engine Preparation
 
 1. **Enable mirrored networking:**
@@ -39,6 +49,9 @@ Placeholders used below (look them up locally; never commit real values):
      networkingMode=mirrored
      firewall=false
      ```
+
+     > **Security note:** `firewall=false` disables the Hyper-V firewall for
+     > WSL, so Windows firewall policy no longer filters traffic to the distro.
 
 2. **Force the WSL engine update** so WSL supports the latest networking features:
 
@@ -70,6 +83,10 @@ Placeholders used below (look them up locally; never commit real values):
 
    - Verify the control plane is live: `sudo kubectl get nodes`
 
+   > This quick install has no `config.yaml`: no `cluster-init`, no etcd-s3
+   > snapshots. Use [bootstrap.md "Shared: K3s install"](bootstrap.md#shared-k3s-install)
+   > for this platform.
+
 ## Phase 4: Network Bridge Fallback (Portproxy)
 
 If WSL fails to inherit the host's LAN address (`<HP_HOST_IP>`) and instead assigns a NAT address (`<WSL_INTERNAL_IP>`), manually bridge traffic from Windows into the WSL subsystem.
@@ -91,6 +108,9 @@ If WSL fails to inherit the host's LAN address (`<HP_HOST_IP>`) and instead assi
    ```bash
    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --tls-san <HP_HOST_IP> --write-kubeconfig-mode 0600" sh -s -
    ```
+
+   > Also bypasses `config.yaml` (no embedded etcd, no S3 snapshots). Put
+   > `tls-san` in `/etc/rancher/k3s/config.yaml` per bootstrap.md instead.
 
 ## Phase 5: macOS Workstation Connection
 

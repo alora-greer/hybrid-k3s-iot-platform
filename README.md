@@ -15,39 +15,63 @@ by construction, and CI enforces it.
 
 ## Architecture
 
-```
-                                            Internet users
-                                                   │
-┌─ PUBLIC CLOUD ───────────────────────────────────┼───────────────────────────────────────────────┐
-│  ┌─ GCP ─────────────────────┐   ┌─ Cloudflare ──▼─────────┐   ┌─ AWS ─────────────────────────┐ │
-│  │ Cloud DNS · DNSSEC · CAA  │   │ Edge TLS · Access       │   │ S3 backups · SSE-KMS          │ │
-│  │ grafana.<domain>  CNAME   ├───▶ Tunnel ingress          │   │ versioned · Glacier IR        │ │
-│  │   → <tunnel>.cfargotunnel │   │                         │   │ per-prefix IAM writers        │ │
-│  └───────────────────────────┘   └────────────┬────────────┘   └──────▲─────────────────▲──────┘ │
-│                                               │                       │                 │        │
-└───────────────────────────────────────────────┼───────────────────────┼─────────────────┼────────┘
-                                                │ outbound-only tunnel  │ etcd snaps      │ HA
-                                                │ (0 open ports)        │                 │ backups
-                                                │                       │                 │
-┌─ HOME LAB · GL.iNet Slate 7 subnet ───────────┼───────────────────────┼─────────────────┼────────┐
-│                                               │                       │                 │        │
-│  ┌─ lab-k3s-ctrl-01 · K3s · host A or B ¹ ────▼───────────────────────┴─────────┐       │        │
-│  │ Grafana ◀── Traefik ◀─────────────── cloudflared ×2        etcd snapshot 6h  │       │        │
-│  │    ▲                                                                         │       │        │
-│  │    └───────────────────────────────────────────── Prometheus ─▶ Alertmanager │       │        │
-│  │ SealedSecrets     K8sGPT operator                      ▲                     │       │        │
-│  │                          │                             │                     │       │        │
-│  └──────────────────────────┼─────────────────────────────┼─────────────────────┘       │        │
-│                             │ LLM API (LAN)               │ scrape + Bearer token       │        │
-│  ┌─ Mac workstation ────────▼─────────────┐   ┌───────────┴─────────────────────────────┴──────┐ │
-│  │ Zed · Claude Code                      │   │ Raspberry Pi 4 · Home Assistant OS             │ │
-│  │ kubectl · helm · terraform · kubeseal  │   │ /api/prometheus · native backups → S3          │ │
-│  │ Ollama :11434 ◀── k8sgpt CLI           │   │ Sonoff Zigbee 3.0 ─▶ Aqara temp/contact        │ │
-│  │   llama3.1 · qwen2.5-coder             │   │ HomeKit ─▶ ecobee Essential                    │ │
-│  │                                        │   │ Ring cameras · smart plugs                     │ │
-│  └────────────────────────────────────────┘   └────────────────────────────────────────────────┘ │
-│                                                                                                  │
-└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+  users["Internet users"]
+
+  subgraph pub["Public cloud"]
+    cf["Cloudflare edge<br/>TLS termination<br/>tunnel ingress"]
+    dns["GCP Cloud DNS<br/>DNSSEC, CAA<br/>CNAME to tunnel"]
+    s3["AWS S3<br/>SSE-KMS, versioned<br/>per-prefix IAM writers"]
+  end
+
+  subgraph lab["Home lab subnet - GL.iNet Slate 7, no port forwards"]
+    subgraph k3s["lab-k3s-ctrl-01 - K3s single node"]
+      cfd["cloudflared x2"]
+      traefik["Traefik ingress"]
+      grafana["Grafana"]
+      prom["Prometheus<br/>15d retention, 20Gi PVC"]
+      am["Alertmanager<br/>no receivers yet"]
+      ss["SealedSecrets controller"]
+      k8sgpt["K8sGPT operator"]
+      etcd["etcd snapshots<br/>every 6h"]
+    end
+
+    subgraph pi["Raspberry Pi 4 - Home Assistant OS"]
+      ha["Home Assistant<br/>/api/prometheus"]
+      zb["Sonoff Zigbee dongle"]
+      aqara["Aqara temp and contact sensors"]
+      ecobee["ecobee Essential<br/>HomeKit, local"]
+      ring["Ring cameras<br/>cloud integration"]
+      plugs["Smart plugs"]
+    end
+
+    subgraph mac["Mac workstation"]
+      ollama["Ollama :11434"]
+      tools["terraform, kubectl,<br/>helm, kubeseal"]
+      ai["Claude Code, Zed"]
+    end
+  end
+
+  users --> cf
+  dns -. "needs Cloudflare-hosted zone, see Known limitation" .-> cf
+  cfd -. "outbound-only tunnel" .-> cf
+  cf -- "via tunnel" --> cfd
+  cfd --> traefik
+  traefik --> grafana
+  grafana -- "datasource" --> prom
+  prom --> am
+  prom -- "scrape /api/prometheus, HTTP + Bearer token" --> ha
+  k8sgpt -- "OpenAI-compatible API, LAN" --> ollama
+  etcd -- "k3s/ prefix" --> s3
+  ha -- "home-assistant/ prefix" --> s3
+  zb --> ha
+  aqara --> zb
+  ecobee --> ha
+  ring --> ha
+  plugs --> ha
+  tools -- "K3s API :6443, kubectl and terraform" --> k3s
+  ai --- tools
 ```
 
 ¹ `lab-k3s-ctrl-01` runs on one of two interchangeable hosts. Everything above
@@ -67,15 +91,29 @@ the K3s API (add-ons, manifests, backups, tunnel) is identical either way:
                                               └──────────────────────────────────────────────────────┘
 ```
 
+### Known limitation: DNS and Cloudflare Tunnel
+
+`terraform/gcp-dns` publishes `grafana.<domain>` as a CNAME to
+`<tunnel-id>.cfargotunnel.com`. That only routes if the zone is hosted on
+Cloudflare. A tunnel hostname whose DNS lives outside Cloudflare needs a
+[partial (CNAME) zone setup](https://developers.cloudflare.com/dns/zone-setups/partial-setup/setup/)
+(Business/Enterprise plans only), where records point to
+`<hostname>.cdn.cloudflare.net` instead. On a free plan the CNAMEs as written
+**will not route traffic**. See
+[Cloudflare's tunnel DNS docs](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/).
+Resolution: move this domain's DNS to Cloudflare (free full setup) and keep
+Cloud DNS for other records or domains. Cloudflare Access is **not**
+deployed; Grafana is protected only by its own login.
+
 | Layer | Technology | Managed by |
 |---|---|---|
 | Network | GL.iNet GL-BE3600 Slate 7 — isolated subnet, DHCP reservations, no port forwards | Router UI (documented) |
 | Compute | K3s on Ubuntu 24.04 — **A:** native Ubuntu Server (`HandleLidSwitch=ignore`) or **B:** Windows 11 + WSL2 + `netsh` portproxy | [`docs/bootstrap.md`](docs/bootstrap.md#k3s-host-preparation) · [`docs/hp-wsl-k3s-setup.md`](docs/hp-wsl-k3s-setup.md) |
 | Cluster add-ons | SealedSecrets, kube-prometheus-stack, K8sGPT operator | [`terraform/k8s-addons`](terraform/k8s-addons) |
 | Workloads | HA ScrapeConfig + alerts, Grafana ingress, cloudflared, K8sGPT CR | [`k8s-manifests`](k8s-manifests) |
-| IoT edge | Home Assistant OS, Zigbee, HomeKit, Ring | [`docs/k3s-iot-stack.md`](docs/k3s-iot-stack.md) |
+| IoT edge | Home Assistant OS, Zigbee, HomeKit, Ring (cloud integration) | [`docs/k3s-iot-stack.md`](docs/k3s-iot-stack.md) |
 | Backups | AWS S3 + KMS + IAM least privilege | [`terraform/aws-backup`](terraform/aws-backup) |
-| DNS | GCP Cloud DNS (DNSSEC, CAA) → Cloudflare Tunnel | [`terraform/gcp-dns`](terraform/gcp-dns) |
+| DNS | GCP Cloud DNS (DNSSEC, CAA, tunnel CNAMEs); **tunnel routing needs a Cloudflare-hosted zone, see [Known limitation](#known-limitation-dns-and-cloudflare-tunnel)** | [`terraform/gcp-dns`](terraform/gcp-dns) |
 | AI tooling | Zed, Claude Code, Ollama, K8sGPT | [`docs/ai-dev-environment.md`](docs/ai-dev-environment.md) |
 
 ### K3s host options (`lab-k3s-ctrl-01`)
@@ -127,15 +165,20 @@ Full setup: [`docs/ai-dev-environment.md`](docs/ai-dev-environment.md).
 ## K3s IoT Stack
 
 1. **Sensors → Home Assistant.** Aqara Zigbee sensors (via the Sonoff dongle),
-   the ecobee (paired locally over HomeKit — no cloud dependency), Ring cameras
-   and smart plugs all land in Home Assistant OS on the Pi.
+   the ecobee (paired locally over HomeKit, no cloud dependency), Ring cameras
+   (via Home Assistant's Ring **cloud** integration) and smart plugs all land
+   in Home Assistant OS on the Pi.
 2. **Home Assistant → Prometheus.** HA exposes `/api/prometheus`; a
    Prometheus Operator `ScrapeConfig` scrapes it using a Long-Lived Access Token
    stored as a **SealedSecret**.
 3. **Alerting.** `PrometheusRule`s fire on HA being unreachable, rooms out of
-   temperature range, and stale Zigbee sensors (dead batteries / mesh drops).
+   temperature range, and stale `sensor` entities (dead batteries / mesh
+   drops). Alertmanager has **no receivers configured yet**, so alerts are
+   visible in Prometheus/Alertmanager UIs but notify no one.
 4. **Dashboards.** Grafana is published at `grafana.<domain>` through
    **Cloudflare Tunnel → Traefik**; nothing is port-forwarded on the router.
+   Protected by the Grafana login only (no Cloudflare Access); see the
+   [DNS limitation](#known-limitation-dns-and-cloudflare-tunnel).
 5. **Resilience.** K3s etcd snapshots every 6 h and daily HA backups go to an
    encrypted, versioned S3 bucket with per-source, prefix-scoped IAM users.
 
@@ -174,15 +217,30 @@ Details: [`docs/k3s-iot-stack.md`](docs/k3s-iot-stack.md) ·
 ## Quick start
 
 ```bash
-cp .env.example .env                     # environment-specific values (gitignored)
+# 0. Config templates (all gitignored once copied)
+cp .env.example .env
 for m in aws-backup gcp-dns k8s-addons; do
   cp terraform/$m/terraform.tfvars.example terraform/$m/terraform.tfvars
 done
+make help && make lint                   # terraform validate + kubeconform
 
-make help
-make lint                                # terraform validate + kubeconform
+# 1. Backup bucket (then create writer keys out-of-band)
+terraform -chdir=terraform/aws-backup init && terraform -chdir=terraform/aws-backup apply
+
+# 2. On lab-k3s-ctrl-01: write /etc/rancher/k3s/config.yaml, install K3s
+#    (docs/bootstrap.md "Shared: K3s install"), then copy kubeconfig to the Mac
+
+# 3. Cluster add-ons: SealedSecrets controller, Prometheus/Grafana, K8sGPT operator
+terraform -chdir=terraform/k8s-addons init && terraform -chdir=terraform/k8s-addons apply
+
+# 4. Fill in .env, then seal (needs the controller from step 3)
 make seal-ha-token seal-cloudflared-token
+
+# 5. Deploy manifests
 make diff && make apply
+
+# 6. DNS (see Known limitation above before relying on the CNAMEs)
+terraform -chdir=terraform/gcp-dns init && terraform -chdir=terraform/gcp-dns apply
 ```
 
 See [`docs/bootstrap.md`](docs/bootstrap.md) for the full ordered runbook.
@@ -198,6 +256,10 @@ See [`docs/bootstrap.md`](docs/bootstrap.md) for the full ordered runbook.
   keys in Terraform state; writers can't delete object versions.
 - **Local AI for live data** — cluster telemetry never leaves the LAN.
 
+Known gaps (no Cloudflare Access, plain-HTTP HA scrape, local Terraform state,
+unpinned versions, no NetworkPolicies, and more) are listed in
+[`docs/security.md`](docs/security.md#known-gaps).
+
 See [`docs/security.md`](docs/security.md).
 
 ---
@@ -209,3 +271,7 @@ See [`docs/security.md`](docs/security.md).
 - [ ] Argo CD / Flux GitOps for `k8s-manifests/`
 - [ ] SLOs on Home Assistant availability with burn-rate alerts
 - [ ] Remote Terraform state (S3/GCS backends with locking)
+- [ ] Alertmanager receivers (e.g. email/Slack/ntfy)
+- [ ] Cloudflare Access or Keycloak OIDC in front of Grafana
+- [ ] Resolve the Cloudflare / Cloud DNS split (host the tunnel domain on Cloudflare)
+- [ ] Pin Helm chart versions and the K3s version (`INSTALL_K3S_VERSION`)

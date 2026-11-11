@@ -4,12 +4,28 @@
 
 | Source | Mechanism | S3 prefix | Frequency | Retention |
 |---|---|---|---|---|
-| K3s cluster state | K3s embedded-etcd snapshots (`etcd-s3`) | `k3s/` | every 6 h | 20 snapshots + 90 d noncurrent versions |
-| Home Assistant | HA native backups → S3 backup location | `home-assistant/` | daily | per HA setting + 90 d noncurrent versions |
+| K3s cluster state | K3s embedded-etcd snapshots (`etcd-s3`) | `k3s/` | every 6 h | K3s keeps the newest 20 (~5 days); pruned snapshots stay as noncurrent versions for 90 d |
+| Home Assistant | HA native backups → S3 backup location | `home-assistant/` | daily | per HA setting; superseded or deleted objects stay as noncurrent versions for 90 d |
 | Git repo | GitHub | — | every push | forever |
 
-Everything in S3 is **SSE-KMS encrypted**, **versioned**, transitioned to
-Glacier Instant Retrieval after 30 days, and only reachable over TLS.
+Everything in S3 is **SSE-KMS encrypted**, **versioned**, and only reachable
+over TLS. Lifecycle defaults (`terraform/aws-backup/variables.tf`):
+
+- Current objects move to Glacier Instant Retrieval after 30 days
+  (`transition_to_glacier_days`) and expire after 365 days (`expiration_days`).
+- Noncurrent versions expire after 90 days (`noncurrent_version_expiration_days`).
+- With `etcd-snapshot-retention: 20` at a 6 h cadence, K3s prunes snapshots
+  after ~5 days, long before the 30-day transition. In practice the Glacier IR
+  transition only applies to Home Assistant backups; pruned K3s snapshots
+  linger as noncurrent versions until the 90-day expiry.
+
+### What is NOT backed up
+
+etcd snapshots capture Kubernetes **objects** (including the SealedSecrets
+key), not PersistentVolume **data**. Prometheus' TSDB and Grafana's database
+(both `local-path` PVCs on the node) are not backed up. After a rebuild,
+metrics history is gone, and any dashboards created in the Grafana UI are lost
+unless they were provisioned from code (dashboards-as-code is on the roadmap).
 
 ## Threat model for the backup bucket
 
