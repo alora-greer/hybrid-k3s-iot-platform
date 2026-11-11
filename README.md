@@ -31,7 +31,7 @@ by construction, and CI enforces it.
                                                 │                       │                 │
 ┌─ HOME LAB · GL.iNet Slate 7 subnet ───────────┼───────────────────────┼─────────────────┼────────┐
 │                                               │                       │                 │        │
-│  ┌─ lab-k3s-ctrl-01 · K3s on Ubuntu 24.04 ────▼───────────────────────┴─────────┐       │        │
+│  ┌─ lab-k3s-ctrl-01 · K3s · host A or B ¹ ────▼───────────────────────┴─────────┐       │        │
 │  │ Grafana ◀── Traefik ◀─────────────── cloudflared ×2        etcd snapshot 6h  │       │        │
 │  │    ▲                                                                         │       │        │
 │  │    └───────────────────────────────────────────── Prometheus ─▶ Alertmanager │       │        │
@@ -50,16 +50,53 @@ by construction, and CI enforces it.
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+¹ `lab-k3s-ctrl-01` runs on one of two interchangeable hosts. Everything above
+the K3s API (add-ons, manifests, backups, tunnel) is identical either way:
+
+```
+ Option A · native bare metal                 Option B · Windows 11 + WSL2 (NAT) + portproxy
+ ┌─ HP laptop ──────────────────────────┐     ┌─ HP laptop · Windows 11 ─────────────────────────────┐
+ │ Ubuntu Server 24.04 LTS              │     │ LAN ─▶ <HP_HOST_IP>:6443 / 80 / 443                  │
+ │ HandleLidSwitch=ignore               │     │ Windows Firewall: allow TCP 6443,80,443 (Private)    │
+ │                                      │     │ netsh portproxy  0.0.0.0:<port> ─┐                   │
+ │ K3s · <K3S_NODE_IP>:6443 / 80 / 443  │     │                                  ▼                   │
+ │   (stable DHCP reservation)          │     │  ┌─ WSL2 VM · Ubuntu 24.04 · systemd=true ────────┐  │
+ └──────────────────────────────────────┘     │  │ K3s · <WSL_INTERNAL_IP>:6443 / 80 / 443        │  │
+                                              │  │   (NAT address may change on restart)          │  │
+                                              │  └────────────────────────────────────────────────┘  │
+                                              └──────────────────────────────────────────────────────┘
+```
+
 | Layer | Technology | Managed by |
 |---|---|---|
 | Network | GL.iNet GL-BE3600 Slate 7 — isolated subnet, DHCP reservations, no port forwards | Router UI (documented) |
-| Compute | K3s on Ubuntu Server 24.04 (`HandleLidSwitch=ignore`) | [`docs/k3s-iot-stack.md`](docs/k3s-iot-stack.md) |
+| Compute | K3s on Ubuntu 24.04 — **A:** native Ubuntu Server (`HandleLidSwitch=ignore`) or **B:** Windows 11 + WSL2 + `netsh` portproxy | [`docs/bootstrap.md`](docs/bootstrap.md#k3s-host-preparation) · [`docs/hp-wsl-k3s-setup.md`](docs/hp-wsl-k3s-setup.md) |
 | Cluster add-ons | SealedSecrets, kube-prometheus-stack, K8sGPT operator | [`terraform/k8s-addons`](terraform/k8s-addons) |
 | Workloads | HA ScrapeConfig + alerts, Grafana ingress, cloudflared, K8sGPT CR | [`k8s-manifests`](k8s-manifests) |
 | IoT edge | Home Assistant OS, Zigbee, HomeKit, Ring | [`docs/k3s-iot-stack.md`](docs/k3s-iot-stack.md) |
 | Backups | AWS S3 + KMS + IAM least privilege | [`terraform/aws-backup`](terraform/aws-backup) |
 | DNS | GCP Cloud DNS (DNSSEC, CAA) → Cloudflare Tunnel | [`terraform/gcp-dns`](terraform/gcp-dns) |
 | AI tooling | Zed, Claude Code, Ollama, K8sGPT | [`docs/ai-dev-environment.md`](docs/ai-dev-environment.md) |
+
+### K3s host options (`lab-k3s-ctrl-01`)
+
+The HP laptop can host the single-node K3s server in one of two ways. Pick one;
+the cluster add-ons, manifests, backups, and tunnel don't change.
+
+| | **Option A: native Ubuntu Server** | **Option B: Windows 11 + WSL2 + portproxy** |
+|---|---|---|
+| OS | Ubuntu Server 24.04 LTS on bare metal | Windows 11 host, Ubuntu 24.04 WSL2 distro |
+| K3s API / Traefik reachable at | `<K3S_NODE_IP>:6443` / `:80` / `:443`, bound directly on the LAN NIC | `<HP_HOST_IP>:6443` / `:80` / `:443` → `netsh interface portproxy` → `<WSL_INTERNAL_IP>` |
+| Networking | Plain LAN host with a DHCP reservation on the Slate 7 | WSL2 **NAT** (default) needs portproxy + Windows Firewall rules. **Mirrored** mode (`networkingMode=mirrored`) shares the host's address and can skip portproxy, but it's newer and has more edge cases |
+| Address stability | Stable (DHCP reservation) | Windows host IP is stable (reservation). The **WSL2 NAT IP can change** on reboot or `wsl --shutdown`, so the portproxy needs refreshing |
+| Reboot persistence | `systemd` starts `k3s.service`; lid close ignored via `HandleLidSwitch=ignore` | Requires `systemd=true` in `/etc/wsl.conf`, a startup task that boots the distro and re-applies portproxy, and Windows power settings (lid: *Do nothing*, sleep: *Never*) |
+| TLS SAN | `lab-k3s-ctrl-01` (+ `<K3S_NODE_IP>`) | Must include `<HP_HOST_IP>`, because clients reach the API through the Windows host |
+| Tradeoffs | Simplest and lowest overhead. Laptop is dedicated to Linux | Keeps Windows usable on the laptop. Extra NAT hop, TCP-only portproxy, and Windows Update reboots to plan around |
+
+Step-by-step host prep for both options is in
+[`docs/bootstrap.md`](docs/bootstrap.md#k3s-host-preparation). The full WSL2 walkthrough
+(power, Wi-Fi profile, mirrored networking, kubeconfig) is in
+[`docs/hp-wsl-k3s-setup.md`](docs/hp-wsl-k3s-setup.md).
 
 ---
 
@@ -124,7 +161,8 @@ Details: [`docs/k3s-iot-stack.md`](docs/k3s-iot-stack.md) ·
 │   ├── cloudflared/              # Tunnel Deployment + ServiceMonitor
 │   └── k8sgpt/                   # K8sGPT CR → local Ollama
 └── docs/
-    ├── bootstrap.md              # Bare metal → running platform, in order
+    ├── bootstrap.md              # Bare metal or WSL2 → running platform, in order
+    ├── hp-wsl-k3s-setup.md       # K3s host on Windows 11 + WSL2 (Option B)
     ├── k3s-iot-stack.md
     ├── ai-dev-environment.md
     ├── backup-and-restore.md     # Restore drills, RPO/RTO
