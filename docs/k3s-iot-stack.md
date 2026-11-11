@@ -16,7 +16,8 @@
 | Sonoff Zigbee 3.0 dongle | Pi USB | Zigbee coordinator (ZHA / Zigbee2MQTT) |
 | Aqara temp & contact sensors | Zigbee mesh | Environment + door/window state |
 | ecobee Essential | Wi-Fi, paired via HomeKit Device | Local thermostat control (no cloud dependency) |
-| Ring cameras, smart plugs | Wi-Fi | Cameras / power metering |
+| Ring cameras | Wi-Fi | Home Assistant's Ring **cloud** integration (not local) |
+| Smart plugs | Wi-Fi | Power metering |
 
 ## Data flow
 
@@ -29,11 +30,25 @@
                                                                 ▼
                          ┌──────────── K3s: lab-k3s-ctrl-01 ────────────┐
                          │ Prometheus (ScrapeConfig: home-assistant)    │
-                         │   ├─ PrometheusRules → Alertmanager          │
+                         │   ├─ PrometheusRules → Alertmanager *        │
                          │   └─ Grafana dashboards                      │
                          │ Traefik ◀── cloudflared (outbound tunnel)    │
                          └──────────────────────────────────────────────┘
 ```
+
+\* No Alertmanager receivers are configured yet; see below.
+
+## Monitoring stack defaults
+
+`terraform/k8s-addons` installs kube-prometheus-stack with Prometheus on a
+20Gi `local-path` PVC and 15d retention (`prometheus_storage_size`,
+`prometheus_retention`), and Grafana on a 2Gi `local-path` PVC. Both live on
+the node's disk and are **not** covered by the S3 backups
+([backup-and-restore.md](backup-and-restore.md)).
+
+**Alertmanager has no receivers configured.** `PrometheusRule`s fire and show
+up in the Prometheus and Alertmanager UIs, but nothing notifies anyone. Adding
+receivers (email/Slack/ntfy) is on the roadmap.
 
 ## K3s server setup (`lab-k3s-ctrl-01`)
 
@@ -105,6 +120,16 @@ Kubeconfig files are gitignored by pattern.
 
 3. `make apply` deploys the `ScrapeConfig` and `PrometheusRule`s.
 
+Rule notes:
+
+- `ZigbeeSensorStale` matches **every** `sensor`-domain entity, not only
+  Zigbee ones, using `homeassistant_last_updated_time_seconds`. That metric
+  only changes when an entity's state or attributes change, so a sensor with a
+  steady reading can trip the alert even though it is healthy.
+- `RoomTemperatureOutOfRange` uses the `_celsius` metric
+  (`homeassistant_sensor_temperature_celsius`); if HA is configured for
+  Fahrenheit the rule will not match anything.
+
 Useful queries:
 
 ```promql
@@ -122,10 +147,17 @@ homeassistant_sensor_power_w                                 # smart plugs
 3. In the tunnel's public hostnames, route `grafana.<domain>` →
    `http://traefik.kube-system.svc.cluster.local:80`.
 4. `terraform/gcp-dns` creates the matching CNAME → `<tunnel-id>.cfargotunnel.com`.
-5. Optionally put Cloudflare Access (or Keycloak via OIDC) in front of it.
+5. **Not deployed yet:** Cloudflare Access or Keycloak OIDC in front of
+   Grafana. Today the public hostname is protected only by the Grafana login.
 
-> **DNS caveat:** Cloudflare only routes tunnel traffic for hostnames it
-> proxies. If Cloud DNS is authoritative for the apex, the hostnames served via
-> the tunnel must still be resolvable through a Cloudflare-proxied zone (e.g. a
-> delegated subdomain or a separate Cloudflare-hosted domain). Verify against
-> current Cloudflare documentation for your plan before cutting over.
+> **DNS caveat (known limitation):** the CNAMEs created by `terraform/gcp-dns`
+> (`<tunnel-id>.cfargotunnel.com`) only route if the zone is hosted on
+> Cloudflare. A tunnel hostname whose DNS is hosted elsewhere (such as Cloud
+> DNS) requires a [partial (CNAME) zone setup](https://developers.cloudflare.com/dns/zone-setups/partial-setup/setup/),
+> which is Business/Enterprise only, and records then point to
+> `<hostname>.cdn.cloudflare.net`. On a free plan the CNAMEs as written will
+> not route traffic. See also
+> [Cloudflare's tunnel DNS docs](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/).
+>
+> **Suggested resolution:** move this domain's DNS to Cloudflare (free full
+> setup) and use Cloud DNS for other records or domains.
