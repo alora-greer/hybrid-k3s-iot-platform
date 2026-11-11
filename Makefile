@@ -11,6 +11,10 @@ RENDER_VARS := $$HA_SCRAPE_TARGET $$GRAFANA_HOST $$CLOUDFLARED_IMAGE_TAG \
 MANIFESTS   := k8s-manifests
 RENDERED    := .rendered
 TF_DIRS     := terraform/aws-backup terraform/gcp-dns terraform/k8s-addons
+# CRD schemas — keep in sync with .github/workflows/ci.yml.
+# Vendored schemas/ covers CRDs missing from the datree catalog (K8sGPT).
+LOCAL_SCHEMAS := schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+CRDS_CATALOG  := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
 .PHONY: help
 help: ## Show this help
@@ -77,4 +81,8 @@ scan: ## Scan the working tree for secrets with gitleaks
 
 .PHONY: lint
 lint: tf-validate ## Validate Terraform + Kubernetes schemas
-	kubeconform -strict -summary -ignore-missing-schemas $(MANIFESTS)
+	kubeconform -strict -summary -ignore-missing-schemas \
+	  -schema-location default \
+	  -schema-location '$(LOCAL_SCHEMAS)' \
+	  -schema-location '$(CRDS_CATALOG)' \
+	  $(MANIFESTS)
